@@ -226,6 +226,7 @@ const morgan = require('morgan');
 const SocketIO = require('socket.io');
 const Message = require('./models/Message');
 const http = require('http');
+require('./config/firebaseAdmin');
 
 // Import routes
 const authRoutes = require('./routes/auth');

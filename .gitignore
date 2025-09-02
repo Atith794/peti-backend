@@ -1,0 +1,6 @@
+# Environment files
+.env
+.env.*
+
+# Local environment overrides
+peti-b6879-firebase-adminsdk-fbsvc-35ac352ecb.json

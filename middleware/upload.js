@@ -74,47 +74,49 @@ const path = require('path');
 const crypto = require('crypto');
 const mime = require('mime-types'); // npm i mime-types
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = crypto.randomBytes(16).toString('hex');
+// const storage = multer.diskStorage({
+//   destination: (req, file, cb) => {
+//     cb(null, 'uploads/');
+//   },
+//   filename: (req, file, cb) => {
+//     const uniqueSuffix = crypto.randomBytes(16).toString('hex');
 
-    // 1) Try original extension
-    let ext = (path.extname(file.originalname || '') || '').toLowerCase();
+//     // 1) Try original extension
+//     let ext = (path.extname(file.originalname || '') || '').toLowerCase();
 
-    // 2) If missing or clearly wrong for the mimetype, derive from mimetype
-    const fromMime = mime.extension(file.mimetype); // 'mp4', 'mov', 'jpeg', etc.
+//     // 2) If missing or clearly wrong for the mimetype, derive from mimetype
+//     const fromMime = mime.extension(file.mimetype); // 'mp4', 'mov', 'jpeg', etc.
 
-    // Normalize QuickTime
-    if (file.mimetype === 'video/quicktime') {
-      ext = '.mov';
-    } else if (!ext || ext === '.') {
-      ext = fromMime ? `.${fromMime}` : '';
-    } else {
-      // If original ext conflicts with mimetype (e.g., .jpg but video/*), override
-      const isImageExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
-      const isVideoExt = ['.mp4', '.mov', '.m4v', '.webm'].includes(ext);
-      if (file.mimetype.startsWith('video/') && isImageExt && fromMime) {
-        ext = `.${fromMime}`;
-      }
-      if (file.mimetype.startsWith('image/') && isVideoExt && fromMime) {
-        ext = `.${fromMime}`;
-      }
-    }
+//     // Normalize QuickTime
+//     if (file.mimetype === 'video/quicktime') {
+//       ext = '.mov';
+//     } else if (!ext || ext === '.') {
+//       ext = fromMime ? `.${fromMime}` : '';
+//     } else {
+//       // If original ext conflicts with mimetype (e.g., .jpg but video/*), override
+//       const isImageExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+//       const isVideoExt = ['.mp4', '.mov', '.m4v', '.webm'].includes(ext);
+//       if (file.mimetype.startsWith('video/') && isImageExt && fromMime) {
+//         ext = `.${fromMime}`;
+//       }
+//       if (file.mimetype.startsWith('image/') && isVideoExt && fromMime) {
+//         ext = `.${fromMime}`;
+//       }
+//     }
 
-    // 3) Last-resort fallbacks
-    if (!ext) {
-      if (file.mimetype === 'video/mp4') ext = '.mp4';
-      else if (file.mimetype === 'video/quicktime') ext = '.mov';
-      else if (file.mimetype.startsWith('image/')) ext = '.jpg';
-      else if (file.mimetype.startsWith('audio/')) ext = '.mp3';
-    }
+//     // 3) Last-resort fallbacks
+//     if (!ext) {
+//       if (file.mimetype === 'video/mp4') ext = '.mp4';
+//       else if (file.mimetype === 'video/quicktime') ext = '.mov';
+//       else if (file.mimetype.startsWith('image/')) ext = '.jpg';
+//       else if (file.mimetype.startsWith('audio/')) ext = '.mp3';
+//     }
 
-    cb(null, `${uniqueSuffix}${ext}`);
-  },
-});
+//     cb(null, `${uniqueSuffix}${ext}`);
+//   },
+// });
+
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   // console.log('file.mimetype:', file.mimetype);
