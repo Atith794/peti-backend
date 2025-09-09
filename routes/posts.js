@@ -1,14 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
+const Like = require('../models/Like');
 const auth = require('../middleware/auth');
 const User = require('../models/User');
 const { upload, handleUploadError } = require('../middleware/upload');
 const { uploadBufferToStorage } = require('../utils/storage');
 const path = require('path');
-  
-
-
+const mongoose = require('mongoose');
 
 router.post(
   '/',
@@ -79,24 +78,227 @@ router.post(
 
       res.status(201).json(post);
     } catch (error) {
-      console.error('Error in creating post:', error);
+      console.error('Error in / route in post.js:', error);
       res.status(500).json({ error: error.message });
     }
   }
 );
 
 // Get feed posts
+//100% working code
+// router.get('/feed', auth, async (req, res) => {
+//   try {
+//     const posts = await Post.find({})
+//       .populate('user', 'username profilePicture')
+//       .populate('comments.user', 'username profilePicture')
+//       .sort({ createdAt: -1 })
+//       .limit(50);
+
+//     res.json(posts);
+//   } catch (error) {
+//     console.error("Error in /feed:", error); 
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+// Code to fetch paginated data - V1
+// router.get('/feed', auth, async (req, res) => {
+//   try {
+//     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
+//     const cursor = req.query.cursor; 
+//     const query = {};
+
+//     if (cursor) {
+//       if (!mongoose.isValidObjectId(cursor)) {
+//         return res.status(400).json({ error: 'Invalid cursor' });
+//       }
+//       query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+//     }
+
+//     const items = await Post.find(query)
+//       .select('user caption mediaUrl mediaType audioUrl likes comments createdAt') // trim payload if needed
+//       .populate('user', 'username profilePicture')
+//       .sort({ _id: -1 })
+//       .limit(limit + 1)
+//       .lean();
+
+//     const hasMore = items.length > limit;
+//     const data = hasMore ? items.slice(0, limit) : items;
+//     const nextCursor = hasMore ? String(data[data.length - 1]._id) : null;
+
+//     res.json({ data, nextCursor, hasMore });
+//   } catch (error) {
+//     console.error("Error in /feed route:", error);
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+// Code to fetch paginated data using aggregation - V2
+// router.get('/feed', auth, async (req, res) => {
+//   try {
+//     const rawLimit = parseInt(req.query.limit, 10);
+//     const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 20, 50));
+//     const cursor = req.query.cursor;
+//     const match = {};
+
+//     if (cursor) {
+//       if (!mongoose.isValidObjectId(cursor)) {
+//         return res.status(400).json({ error: 'Invalid cursor' });
+//       }
+//       match._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+//     }
+
+//     const userId = req.user._id; // from your auth middleware
+
+//     const pipeline = [
+//       { $match: match },
+//       { $sort: { _id: -1 } },
+//       { $limit: limit + 1 }, // fetch one extra to compute hasMore
+//       // Join minimal user info
+//       {
+//         $lookup: {
+//           from: 'users',
+//           let: { uid: '$user' },
+//           pipeline: [
+//             { $match: { $expr: { $eq: ['$_id', '$$uid'] } } },
+//             { $project: { _id: 1, username: 1, profilePicture: 1 } },
+//           ],
+//           as: 'user',
+//         }
+//       },
+//       { $unwind: '$user' },
+//       // Compute counts + likedByMe; drop heavy arrays
+//       {
+//         $addFields: {
+//           likeCount: { $size: { $ifNull: ['$likes', []] } },
+//           commentCount: { $size: { $ifNull: ['$comments', []] } },
+//           likedByMe: { $in: [userId, { $ifNull: ['$likes', []] }] },
+//         }
+//       },
+//       {
+//         $project: {
+//           // keep fields the app uses
+//           caption: 1,
+//           mediaUrl: 1,
+//           mediaType: 1,
+//           audioUrl: 1,
+//           createdAt: 1,
+//           user: 1,
+//           likeCount: 1,
+//           commentCount: 1,
+//           likedByMe: 1,
+//           // drop heavy arrays
+//           likes: 0,
+//           comments: 0,
+//         }
+//       },
+//     ];
+
+//     const items = await Post.aggregate(pipeline).allowDiskUse(true);
+//     const hasMore = items.length > limit;
+//     const data = hasMore ? items.slice(0, limit) : items;
+//     const nextCursor = hasMore ? String(data[data.length - 1]._id) : null;
+
+//     res.json({ data, nextCursor, hasMore });
+//   } catch (error) {
+//     console.error('Error in /feed route:', error);
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+//Code to fetch paginated data using aggregation with efficient likes counter - V3
 router.get('/feed', auth, async (req, res) => {
   try {
-    const posts = await Post.find({})
-      .populate('user', 'username profilePicture')
-      .populate('comments.user', 'username profilePicture')
-      .sort({ createdAt: -1 })
-      .limit(50);
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 20, 50));
+    const cursor = req.query.cursor;
+    const match = {};
 
-    res.json(posts);
+    if (cursor) {
+      if (!mongoose.isValidObjectId(cursor)) {
+        return res.status(400).json({ error: 'Invalid cursor' });
+      }
+      match._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+    }
+
+    const userId = new mongoose.Types.ObjectId(req.user.userId); // <-- fix
+
+    const pipeline = [
+      { $match: match },
+      { $sort: { _id: -1 } },
+      { $limit: limit + 1 },
+
+      // Join minimal user info
+      {
+        $lookup: {
+          from: 'users',
+          let: { uid: '$user' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$$uid'] } } },
+            { $project: { _id: 1, username: 1, profilePicture: 1 } },
+          ],
+          as: 'user',
+        }
+      },
+      { $unwind: '$user' },
+
+      // Compute likedByMe with a pinpoint lookup into likes (fast with unique index)
+      {
+        $lookup: {
+          from: 'likes',
+          let: { pid: '$_id', uid: userId },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$postId', '$$pid'] },
+                    { $eq: ['$userId', '$$uid'] },
+                  ]
+                }
+              }
+            },
+            { $limit: 1 }
+          ],
+          as: 'meLike'
+        }
+      },
+      { $addFields: { likedByMe: { $gt: [{ $size: '$meLike' }, 0] } } },
+
+      // Project small, rely on stored counters (avoid scanning big arrays)
+      {
+        $project: {
+          caption: 1,
+          mediaUrl: 1,
+          mediaType: 1,
+          audioUrl: 1,
+          createdAt: 1,
+          user: 1,
+
+          // Use numeric counters from Post
+          likeCount: 1,
+          commentCount: 1,
+          likedByMe: 1,
+
+          // Never ship heavy arrays in feed
+          likes: 0,
+          comments: 0,
+          meLike: 0,
+          likerSample: 0, // optionally keep if you want avatars elsewhere
+          hashtags: 1,    // keep/remove as you like
+          location: 1,
+        }
+      },
+    ];
+
+    const items = await Post.aggregate(pipeline).allowDiskUse(true);
+    const hasMore = items.length > limit;
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? String(data[data.length - 1]._id) : null;
+
+    res.json({ data, nextCursor, hasMore });
   } catch (error) {
-    console.error("Error in /feed:", error); 
+    console.error('Error in /feed route:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -114,21 +316,71 @@ router.get('/:id', auth, async (req, res) => {
 
     res.json(post);
   } catch (error) {
+    console.error('Error in /:id route:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Like/Unlike post
+// router.post('/:id/like', auth, async (req, res) => {
+//   try {
+//     const post = await Post.findById(req.params.id);
+//     if (!post) {
+//       return res.status(404).json({ error: 'Post not found' });
+//     }
+
+//     await post.toggleLike(req.user.userId);
+//     res.json({ liked: post.isLikedBy(req.user.userId) });
+//   } catch (error) {
+//     console.error('Error in /:id/like route:', error);
+//     res.status(500).json({ error: error.message });
+//   }
+// });
+
+//Efficiently handle likes/unlikes
 router.post('/:id/like', auth, async (req, res) => {
   try {
-    const post = await Post.findById(req.params.id);
-    if (!post) {
-      return res.status(404).json({ error: 'Post not found' });
-    }
+    const postId = new mongoose.Types.ObjectId(req.params.id);
+    const userId = new mongoose.Types.ObjectId(req.user.userId); // NOTE: your auth sets req.user.userId
 
-    await post.toggleLike(req.user.userId);
-    res.json({ liked: post.isLikedBy(req.user.userId) });
+    // Ensure post exists (cheap projection)
+    const exists = await Post.exists({ _id: postId });
+    if (!exists) return res.status(404).json({ error: 'Post not found' });
+
+    // Try to create the like (fast path). Unique index guarantees idempotency.
+    try {
+      await Like.create({ postId, userId });
+
+      // On success, increment counter & update sample (prepend, cap 20)
+      await Post.updateOne(
+        { _id: postId },
+        {
+          $inc: { likeCount: 1 },
+          $push: { likerSample: { $each: [userId], $position: 0, $slice: 20 } },
+        }
+      );
+
+      // Optionally return fresh likeCount without a second read; if you want it:
+      const updated = await Post.findById(postId).select('_id likeCount').lean();
+      return res.json({ liked: true, likeCount: updated?.likeCount ?? undefined });
+    } catch (e) {
+      // Duplicate key => user had already liked; interpret as "unlike"
+      if (e?.code === 11000) {
+        await Like.deleteOne({ postId, userId });
+        await Post.updateOne(
+          { _id: postId },
+          {
+            $inc: { likeCount: -1 },
+            $pull: { likerSample: userId },
+          }
+        );
+        const updated = await Post.findById(postId).select('_id likeCount').lean();
+        return res.json({ liked: false, likeCount: updated?.likeCount ?? undefined });
+      }
+      throw e;
+    }
   } catch (error) {
+    console.error('Error in /:id/like route:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -153,12 +405,13 @@ router.post('/:id/comment', auth, async (req, res) => {
 
     res.json(post.comments[post.comments.length - 1]);
   } catch (error) {
+    console.error('Error in /:id/comment route:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Delete post
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id/delete', auth, async (req, res) => {
   try {
     const post = await Post.findOne({
       _id: req.params.id,
@@ -172,6 +425,7 @@ router.delete('/:id', auth, async (req, res) => {
     await post.remove();
     res.json({ message: 'Post deleted successfully' });
   } catch (error) {
+    console.error('Error in /:id/delete route:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -185,6 +439,39 @@ router.get('/hashtag/:tag', auth, async (req, res) => {
 
     res.json(posts);
   } catch (error) {
+    console.error('Error in /hashtag/:tag route:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/by-user/:userId', auth, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 24, 50);
+    const cursor = req.query.cursor;
+    const userId = req.params.userId;
+
+    const query = { user: userId };
+    if (cursor) {
+      if (!mongoose.isValidObjectId(cursor)) {
+        return res.status(400).json({ error: 'Invalid cursor' });
+      }
+      query._id = { $lt: new mongoose.Types.ObjectId(cursor) };
+    }
+
+    const items = await Post.find(query)
+      .select('user caption mediaUrl mediaType audioUrl likes comments createdAt')
+      .populate('user', 'username profilePicture')
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .lean();
+
+    const hasMore = items.length > limit;
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? String(data[data.length - 1]._id) : null;
+
+    res.json({ data, nextCursor, hasMore });
+  } catch (error) {
+    console.error("Error in /by-user route:", error);
     res.status(500).json({ error: error.message });
   }
 });
